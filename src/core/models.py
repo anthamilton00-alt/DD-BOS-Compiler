@@ -2,11 +2,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
+from core.reference_status import ReferenceStatus
+
 
 @dataclass
 class DocumentRecord:
     """
-    Represents a parsed DD-BOS document.
+    Represents a parsed and validated DD-BOS document.
     """
 
     # File Information
@@ -26,6 +28,11 @@ class DocumentRecord:
     # Parsed Content
     sections: List[str] = field(default_factory=list)
     references: List[str] = field(default_factory=list)
+
+    # Reference Validation
+    valid_references: List[str] = field(default_factory=list)
+    missing_references: List[str] = field(default_factory=list)
+    reference_statuses: List[ReferenceStatus] = field(default_factory=list)
 
     # Statistics
     paragraph_count: int = 0

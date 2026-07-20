@@ -3,12 +3,19 @@ from pathlib import Path
 import pandas as pd
 
 
-def export_results(records, output_path: Path) -> None:
+def export_results(
+    records,
+    output_path: Path,
+    dependency_graph: dict[str, set[str]] | None = None,
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    dependency_graph = dependency_graph or {}
 
     document_rows = []
     section_rows = []
     reference_rows = []
+    impact_rows = []
 
     for record in records:
         document_rows.append(
@@ -26,6 +33,8 @@ def export_results(records, output_path: Path) -> None:
                 "Table Count": record.table_count,
                 "Section Count": len(record.sections),
                 "Reference Count": len(record.references),
+                "Valid References": len(record.valid_references),
+                "Missing References": len(record.missing_references),
                 "Errors": "; ".join(record.errors),
             }
         )
@@ -40,33 +49,103 @@ def export_results(records, output_path: Path) -> None:
                 }
             )
 
-        for reference in record.references:
+        for status in record.reference_statuses:
             reference_rows.append(
                 {
-                    "Source Document ID": record.document_id,
-                    "Source File": record.file_name,
-                    "Referenced Document ID": reference,
+                    "Source Document": status.source_document,
+                    "Referenced Document": status.referenced_document,
+                    "Exists": status.exists,
+                    "Status": status.message,
                 }
             )
 
-    documents_df = pd.DataFrame(document_rows)
+    for referenced_document in sorted(dependency_graph):
+        dependent_documents = sorted(
+            dependency_graph[referenced_document]
+        )
+
+        for dependent_document in dependent_documents:
+            impact_rows.append(
+                {
+                    "Changed Document": referenced_document,
+                    "Affected Document": dependent_document,
+                }
+            )
+
+    documents_df = pd.DataFrame(
+        document_rows,
+        columns=[
+            "Document ID",
+            "Document Type",
+            "Title",
+            "Version",
+            "Status",
+            "Owner",
+            "Effective Date",
+            "Revision Date",
+            "File Name",
+            "Paragraph Count",
+            "Table Count",
+            "Section Count",
+            "Reference Count",
+            "Valid References",
+            "Missing References",
+            "Errors",
+        ],
+    )
+
     sections_df = pd.DataFrame(
         section_rows,
-        columns=["Document ID", "File Name", "Section Order", "Section"],
+        columns=[
+            "Document ID",
+            "File Name",
+            "Section Order",
+            "Section",
+        ],
     )
+
     references_df = pd.DataFrame(
         reference_rows,
         columns=[
-            "Source Document ID",
-            "Source File",
-            "Referenced Document ID",
+            "Source Document",
+            "Referenced Document",
+            "Exists",
+            "Status",
+        ],
+    )
+
+    impact_df = pd.DataFrame(
+        impact_rows,
+        columns=[
+            "Changed Document",
+            "Affected Document",
         ],
     )
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        documents_df.to_excel(writer, sheet_name="Documents", index=False)
-        sections_df.to_excel(writer, sheet_name="Sections", index=False)
-        references_df.to_excel(writer, sheet_name="References", index=False)
+        documents_df.to_excel(
+            writer,
+            sheet_name="Documents",
+            index=False,
+        )
+
+        sections_df.to_excel(
+            writer,
+            sheet_name="Sections",
+            index=False,
+        )
+
+        references_df.to_excel(
+            writer,
+            sheet_name="References",
+            index=False,
+        )
+
+        impact_df.to_excel(
+            writer,
+            sheet_name="Impact Analysis",
+            index=False,
+        )
 
         for worksheet in writer.book.worksheets:
             worksheet.freeze_panes = "A2"
@@ -77,7 +156,7 @@ def export_results(records, output_path: Path) -> None:
                     len(str(cell.value)) if cell.value is not None else 0
                     for cell in column_cells
                 )
-                worksheet.column_dimensions[column_cells[0].column_letter].width = min(
-                    width + 2,
-                    60,
-                )
+
+                worksheet.column_dimensions[
+                    column_cells[0].column_letter
+                ].width = min(width + 2, 60)
