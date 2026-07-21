@@ -1,10 +1,40 @@
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from openpyxl.styles import Font
 
 
-def _auto_format_sheet(worksheet):
+def _sanitize_excel_value(value: Any) -> Any:
+    """
+    Prevent document text from being written as an Excel formula.
+    """
+
+    if isinstance(value, str) and value.startswith("="):
+        return f"'{value}"
+
+    return value
+
+
+def _sanitize_rows(rows: list[dict]) -> list[dict]:
+    """
+    Sanitize every value before exporting it to Excel.
+    """
+
+    return [
+        {
+            key: _sanitize_excel_value(value)
+            for key, value in row.items()
+        }
+        for row in rows
+    ]
+
+
+def _auto_format_sheet(worksheet) -> None:
+    """
+    Apply standard formatting to an exported worksheet.
+    """
+
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
 
@@ -39,7 +69,12 @@ def export_results(
     change_impact: list[dict] | None = None,
     version_audit: list[dict] | None = None,
     owner_summary: list[dict] | None = None,
+    compliance_report: list[dict] | None = None,
+    compliance_dashboard: list[dict] | None = None,
 ) -> None:
+    """
+    Export all DD-BOS compilation results to an Excel workbook.
+    """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -57,6 +92,8 @@ def export_results(
     change_impact = change_impact or []
     version_audit = version_audit or []
     owner_summary = owner_summary or []
+    compliance_report = compliance_report or []
+    compliance_dashboard = compliance_dashboard or []
 
     document_rows = []
     section_rows = []
@@ -66,7 +103,6 @@ def export_results(
     cross_reference_rows = []
 
     for record in records:
-
         document_rows.append(
             {
                 "Document ID": record.document_id,
@@ -84,6 +120,18 @@ def export_results(
                 "Reference Count": len(record.references),
                 "Valid References": len(record.valid_references),
                 "Missing References": len(record.missing_references),
+                "Compliance Status": (
+                    "Compliant"
+                    if record.is_compliant
+                    else "Non-Compliant"
+                ),
+                "Compliance Findings": len(
+                    record.compliance_findings
+                ),
+                "Critical Findings": record.critical_findings,
+                "High Findings": record.high_findings,
+                "Medium Findings": record.medium_findings,
+                "Low Findings": record.low_findings,
                 "Errors": "; ".join(record.errors),
             }
         )
@@ -109,7 +157,9 @@ def export_results(
             )
 
     for changed_document in sorted(dependency_graph):
-        for affected_document in sorted(dependency_graph[changed_document]):
+        for affected_document in sorted(
+            dependency_graph[changed_document]
+        ):
             impact_rows.append(
                 {
                     "Changed Document": changed_document,
@@ -117,7 +167,10 @@ def export_results(
                 }
             )
 
-    for position, document_id in enumerate(compile_order, start=1):
+    for position, document_id in enumerate(
+        compile_order,
+        start=1,
+    ):
         compile_rows.append(
             {
                 "Compile Order": position,
@@ -135,7 +188,9 @@ def export_results(
             }
         )
 
-    for referenced_document, sources in sorted(cross_reference_index.items()):
+    for referenced_document, sources in sorted(
+        cross_reference_index.items()
+    ):
         for source_document in sorted(sources):
             cross_reference_rows.append(
                 {
@@ -145,6 +200,8 @@ def export_results(
             )
 
     sheets = {
+        "Compliance Dashboard": compliance_dashboard,
+        "Compliance Report": compliance_report,
         "Dashboard": dashboard,
         "Documents": document_rows,
         "Sections": section_rows,
@@ -163,14 +220,19 @@ def export_results(
         "Owner Summary": owner_summary,
     }
 
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-
+    with pd.ExcelWriter(
+        output_path,
+        engine="openpyxl",
+    ) as writer:
         for sheet_name, rows in sheets.items():
+            sanitized_rows = _sanitize_rows(rows)
 
-            pd.DataFrame(rows).to_excel(
+            pd.DataFrame(sanitized_rows).to_excel(
                 writer,
                 sheet_name=sheet_name,
                 index=False,
             )
 
-            _auto_format_sheet(writer.sheets[sheet_name])
+            _auto_format_sheet(
+                writer.sheets[sheet_name]
+            )

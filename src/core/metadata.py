@@ -3,6 +3,19 @@ import re
 
 from docx import Document
 
+from core.registry import (
+    DATE_LABELS,
+    DOCUMENT_ID_LABELS,
+    INVALID_OWNER_VALUES,
+    OWNER_LABELS,
+    STATUS_LABELS,
+    TITLE_LABELS,
+    VALID_DOCUMENT_PREFIXES,
+    VALID_OWNERS,
+    VALID_STATUSES,
+    VERSION_LABELS,
+)
+
 
 METADATA_FIELDS = {
     "Document ID": "",
@@ -14,84 +27,110 @@ METADATA_FIELDS = {
     "Revision Date": "",
 }
 
+
 LABEL_MAP = {
-    "DOCUMENT ID": "Document ID",
-    "ASSEMBLY ID": "Document ID",
-    "ROOM ID": "Document ID",
-    "FLOOR PLAN ID": "Document ID",
-
-    "DOCUMENT NAME": "Title",
-    "ASSEMBLY NAME": "Title",
-    "ROOM NAME": "Title",
-    "FLOOR PLAN NAME": "Title",
-
-    "VERSION": "Version",
-    "STATUS": "Status",
-    "DOCUMENT OWNER": "Owner",
-    "OWNER": "Owner",
+    **{label: "Document ID" for label in DOCUMENT_ID_LABELS},
+    **{label: "Title" for label in TITLE_LABELS},
+    **{label: "Version" for label in VERSION_LABELS},
+    **{label: "Status" for label in STATUS_LABELS},
+    **{label: "Owner" for label in OWNER_LABELS},
     "EFFECTIVE DATE": "Effective Date",
+    "DATE EFFECTIVE": "Effective Date",
     "REVISION DATE": "Revision Date",
+    "LAST REVISION DATE": "Revision Date",
+    "LAST REVISED": "Revision Date",
 }
 
+
+PREFIX_PATTERN = "|".join(
+    sorted(
+        (re.escape(prefix) for prefix in VALID_DOCUMENT_PREFIXES),
+        key=len,
+        reverse=True,
+    )
+)
+
 DOCUMENT_ID_PATTERN = re.compile(
-    r"\b(?:ASM|DD|FP|ROOM)-\d+\b",
+    rf"\b(?:{PREFIX_PATTERN})-\d+\b",
     re.IGNORECASE,
 )
 
-VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+)*$")
+VERSION_PATTERN = re.compile(
+    r"^[Vv]?\d+(?:\.\d+)*$"
+)
 
-VALID_STATUSES = {
-    "DRAFT",
-    "ACTIVE",
-    "APPROVED",
-    "FROZEN",
-    "ARCHIVED",
-    "RETIRED",
-}
+DATE_PATTERN = re.compile(
+    r"^(?:"
+    r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+    r"|"
+    r"\d{4}-\d{1,2}-\d{1,2}"
+    r"|"
+    r"[A-Za-z]+\s+\d{1,2},\s+\d{4}"
+    r"|"
+    r"\d{1,2}\s+[A-Za-z]+\s+\d{4}"
+    r")$"
+)
+
 
 INVALID_VALUES = {
     "",
+    "-",
+    "--",
+    "---",
+    "N/A",
+    "NA",
+    "NONE",
+    "TBD",
+    "TO BE DETERMINED",
     "DATE",
-    "DATE:",
     "DATE APPROVED",
-    "DATE APPROVED:",
-    "BUILDER FLOOR PLAN NUMBER",
-    "BUILDER FLOOR PLAN NUMBER:",
-    "DOCUMENT ID",
-    "DOCUMENT ID:",
-    "ASSEMBLY ID",
-    "ASSEMBLY ID:",
-    "ROOM ID",
-    "ROOM ID:",
-    "FLOOR PLAN ID",
-    "FLOOR PLAN ID:",
-    "DOCUMENT NAME",
-    "DOCUMENT NAME:",
-    "ASSEMBLY NAME",
-    "ASSEMBLY NAME:",
-    "ROOM NAME",
-    "ROOM NAME:",
-    "FLOOR PLAN NAME",
-    "FLOOR PLAN NAME:",
-    "VERSION",
-    "VERSION:",
-    "STATUS",
-    "STATUS:",
-    "OWNER",
-    "OWNER:",
-    "DOCUMENT OWNER",
-    "DOCUMENT OWNER:",
-    "EFFECTIVE DATE",
-    "EFFECTIVE DATE:",
-    "REVISION DATE",
-    "REVISION DATE:",
+    "APPROVED BY",
+    "PREPARED BY",
+    "DESCRIPTION",
+    "PURPOSE",
+    "SCOPE",
 }
 
 
-def clean_value(value: str) -> str:
-    value = value.strip()
+VALID_OWNER_LOOKUP = {
+    owner.upper(): owner
+    for owner in VALID_OWNERS
+}
 
-    if value.upper() in INVALID_VALUES:
+INVALID_OWNER_LOOKUP = {
+    owner.upper()
+    for owner in INVALID_OWNER_VALUES
+}
+
+
+def normalize_text(value: str) -> str:
+    """
+    Normalize whitespace without removing metadata labels.
+    """
+
+    return " ".join(value.split()).strip()
+
+
+def normalize_label(value: str) -> str:
+    """
+    Normalize a metadata label for matching.
+    """
+
+    value = normalize_text(value)
+    value = value.rstrip(":").strip()
+
+    return value.upper()
+
+
+def clean_value(value: str) -> str:
+    """
+    Normalize and validate a possible metadata value.
+    """
+
+    value = normalize_text(value)
+    value = value.strip("|").strip()
+
+    if normalize_label(value) in INVALID_VALUES:
         return ""
 
     if value and all(character in {"_", "-", " "} for character in value):
@@ -100,31 +139,146 @@ def clean_value(value: str) -> str:
     return value
 
 
+def normalize_owner(value: str) -> str:
+    """
+    Return the registry-approved owner name or an empty string.
+    """
+
+    value = clean_value(value)
+
+    if not value:
+        return ""
+
+    normalized = normalize_label(value)
+
+    if normalized in INVALID_OWNER_LOOKUP:
+        return ""
+
+    return VALID_OWNER_LOOKUP.get(normalized, "")
+
+
 def extract_filename_metadata(doc_path):
+    """
+    Extract authoritative ID and title values from the filename.
+    """
+
     stem = Path(doc_path).stem.strip()
 
     document_id = ""
-    title = ""
+    title = stem
 
-    id_match = DOCUMENT_ID_PATTERN.search(stem)
+    match = DOCUMENT_ID_PATTERN.search(stem)
 
-    if id_match:
-        document_id = id_match.group(0).upper()
+    if match:
+        document_id = match.group(0).upper()
 
-    title_parts = re.split(r"\s+[—–]\s+", stem, maxsplit=1)
-
-    if len(title_parts) == 2:
-        title = title_parts[1].strip()
+        title = re.sub(
+            rf"^{re.escape(match.group(0))}\s*[-—–]?\s*",
+            "",
+            stem,
+            flags=re.IGNORECASE,
+        ).strip()
 
     return document_id, title
 
 
+def collect_metadata_lines(doc) -> list[str]:
+    """
+    Collect paragraph and table-cell text while preserving labels.
+    """
+
+    lines: list[str] = []
+
+    for paragraph in doc.paragraphs:
+        text = normalize_text(paragraph.text)
+
+        if text:
+            lines.append(text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    text = normalize_text(paragraph.text)
+
+                    if text:
+                        lines.append(text)
+
+    return lines
+
+
+def assign_metadata_value(
+    metadata: dict[str, str],
+    field: str,
+    value: str,
+) -> None:
+    """
+    Validate and assign a metadata field.
+    """
+
+    value = clean_value(value)
+
+    if not value:
+        return
+
+    if normalize_label(value) in LABEL_MAP:
+        return
+
+    if field == "Document ID":
+        if metadata["Document ID"]:
+            return
+
+        match = DOCUMENT_ID_PATTERN.search(value)
+
+        if match:
+            metadata["Document ID"] = match.group(0).upper()
+
+        return
+
+    if field == "Title":
+        if not metadata["Title"]:
+            metadata["Title"] = value
+
+        return
+
+    if field == "Version":
+        normalized = value.lstrip("Vv")
+
+        if VERSION_PATTERN.fullmatch(value):
+            metadata["Version"] = normalized
+
+        return
+
+    if field == "Status":
+        normalized = value.upper()
+
+        if normalized in VALID_STATUSES:
+            metadata["Status"] = normalized
+
+        return
+
+    if field in {"Effective Date", "Revision Date"}:
+        if DATE_PATTERN.fullmatch(value):
+            metadata[field] = value
+
+        return
+
+    if field == "Owner":
+        if metadata["Owner"]:
+            return
+
+        owner = normalize_owner(value)
+
+        if owner:
+            metadata["Owner"] = owner
+
+
 def extract_metadata(doc_path):
     """
-    Extract DD-BOS metadata from a Word document.
+    Extract DD-BOS metadata from paragraphs and tables.
 
-    The standardized filename is authoritative for Document ID and Title.
-    Document content supplies Version, Status, Owner, and date fields.
+    The filename remains authoritative for Document ID and Title.
+    Registry values control document prefixes, statuses, labels, and owners.
     """
 
     doc = Document(doc_path)
@@ -135,46 +289,37 @@ def extract_metadata(doc_path):
     metadata["Document ID"] = filename_id
     metadata["Title"] = filename_title
 
-    paragraphs = [
-        paragraph.text.strip()
-        for paragraph in doc.paragraphs
-        if paragraph.text.strip()
-    ]
+    lines = collect_metadata_lines(doc)
 
-    for index, text in enumerate(paragraphs[:-1]):
-        label = text.rstrip(":").strip().upper()
+    for index, text in enumerate(lines):
+        normalized_text = normalize_label(text)
 
-        if label not in LABEL_MAP:
+        if normalized_text in LABEL_MAP:
+            if index + 1 < len(lines):
+                assign_metadata_value(
+                    metadata,
+                    LABEL_MAP[normalized_text],
+                    lines[index + 1],
+                )
+
             continue
 
-        field = LABEL_MAP[label]
-        value = clean_value(paragraphs[index + 1])
+        inline_match = re.match(
+            r"^\s*([^:]{2,40})\s*:\s*(.+?)\s*$",
+            text,
+        )
 
-        if not value:
+        if not inline_match:
             continue
 
-        if field == "Document ID":
-            if not metadata["Document ID"]:
-                id_match = DOCUMENT_ID_PATTERN.search(value)
+        label = normalize_label(inline_match.group(1))
+        value = inline_match.group(2)
 
-                if id_match:
-                    metadata["Document ID"] = id_match.group(0).upper()
-
-        elif field == "Title":
-            if not metadata["Title"]:
-                metadata["Title"] = value
-
-        elif field == "Version":
-            if VERSION_PATTERN.fullmatch(value):
-                metadata["Version"] = value
-
-        elif field == "Status":
-            normalized_status = value.upper()
-
-            if normalized_status in VALID_STATUSES:
-                metadata["Status"] = normalized_status
-
-        else:
-            metadata[field] = value
+        if label in LABEL_MAP:
+            assign_metadata_value(
+                metadata,
+                LABEL_MAP[label],
+                value,
+            )
 
     return metadata

@@ -5,19 +5,38 @@ from core.models import DocumentRecord
 
 def build_dependency_graph(records: list[DocumentRecord]) -> dict[str, set[str]]:
     """
-    Returns a reverse dependency graph.
+    Build a reverse dependency graph.
+
+    Key   = document that is referenced.
+    Value = documents that reference it.
 
     Example:
 
         ROOM-001:
             ASM-202
             FP-0001
+
+    Self-references are ignored because they do not represent a
+    dependency and they inflate circular dependency, impact, and
+    inbound reference calculations.
     """
 
-    graph = defaultdict(set)
+    graph: dict[str, set[str]] = defaultdict(set)
 
     for record in records:
+        source = record.document_id.upper()
+
         for reference in record.references:
-            graph[reference.upper()].add(record.document_id)
+            target = reference.upper()
+
+            # Ignore blank references
+            if not target:
+                continue
+
+            # Ignore self-references
+            if target == source:
+                continue
+
+            graph[target].add(source)
 
     return dict(graph)
