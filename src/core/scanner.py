@@ -3,6 +3,7 @@ import re
 
 from docx import Document
 
+from core.config import load_config
 from core.metadata import extract_metadata
 from core.models import DocumentRecord
 
@@ -39,14 +40,18 @@ def scan_documents():
     Scan all DD-BOS documents.
     """
 
-    project_root = Path(__file__).resolve().parents[2]
-    docs_folder = project_root / "Documents"
+    config = load_config()
+    docs_folder = config.input_folder
 
     records = []
 
     print("\nScanning documents...\n")
 
-    for file in docs_folder.glob("*.docx"):
+    if not docs_folder.exists():
+        print(f"Document folder not found:\n{docs_folder}\n")
+        return records
+
+    for file in sorted(docs_folder.glob("*.docx")):
 
         try:
 

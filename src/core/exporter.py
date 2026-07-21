@@ -1,23 +1,72 @@
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.styles import Font
+
+
+def _auto_format_sheet(worksheet):
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True)
+
+    for column_cells in worksheet.columns:
+        width = max(
+            len(str(cell.value)) if cell.value is not None else 0
+            for cell in column_cells
+        )
+
+        worksheet.column_dimensions[
+            column_cells[0].column_letter
+        ].width = min(width + 2, 60)
 
 
 def export_results(
     records,
     output_path: Path,
     dependency_graph: dict[str, set[str]] | None = None,
+    compile_order: list[str] | None = None,
+    circular_dependencies: list[str] | None = None,
+    cross_reference_index: dict[str, list[str]] | None = None,
+    health_results: list[dict] | None = None,
+    diagnostics: list[dict] | None = None,
+    dashboard: list[dict] | None = None,
+    duplicate_documents: list[dict] | None = None,
+    orphan_documents: list[dict] | None = None,
+    reference_coverage: list[dict] | None = None,
+    risk_scores: list[dict] | None = None,
+    change_impact: list[dict] | None = None,
+    version_audit: list[dict] | None = None,
+    owner_summary: list[dict] | None = None,
 ) -> None:
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     dependency_graph = dependency_graph or {}
+    compile_order = compile_order or []
+    circular_dependencies = circular_dependencies or []
+    cross_reference_index = cross_reference_index or {}
+    health_results = health_results or []
+    diagnostics = diagnostics or []
+    dashboard = dashboard or []
+    duplicate_documents = duplicate_documents or []
+    orphan_documents = orphan_documents or []
+    reference_coverage = reference_coverage or []
+    risk_scores = risk_scores or []
+    change_impact = change_impact or []
+    version_audit = version_audit or []
+    owner_summary = owner_summary or []
 
     document_rows = []
     section_rows = []
     reference_rows = []
     impact_rows = []
+    compile_rows = []
+    cross_reference_rows = []
 
     for record in records:
+
         document_rows.append(
             {
                 "Document ID": record.document_id,
@@ -39,12 +88,12 @@ def export_results(
             }
         )
 
-        for position, section in enumerate(record.sections, start=1):
+        for index, section in enumerate(record.sections, start=1):
             section_rows.append(
                 {
                     "Document ID": record.document_id,
                     "File Name": record.file_name,
-                    "Section Order": position,
+                    "Section Order": index,
                     "Section": section,
                 }
             )
@@ -59,104 +108,69 @@ def export_results(
                 }
             )
 
-    for referenced_document in sorted(dependency_graph):
-        dependent_documents = sorted(
-            dependency_graph[referenced_document]
-        )
-
-        for dependent_document in dependent_documents:
+    for changed_document in sorted(dependency_graph):
+        for affected_document in sorted(dependency_graph[changed_document]):
             impact_rows.append(
                 {
-                    "Changed Document": referenced_document,
-                    "Affected Document": dependent_document,
+                    "Changed Document": changed_document,
+                    "Affected Document": affected_document,
                 }
             )
 
-    documents_df = pd.DataFrame(
-        document_rows,
-        columns=[
-            "Document ID",
-            "Document Type",
-            "Title",
-            "Version",
-            "Status",
-            "Owner",
-            "Effective Date",
-            "Revision Date",
-            "File Name",
-            "Paragraph Count",
-            "Table Count",
-            "Section Count",
-            "Reference Count",
-            "Valid References",
-            "Missing References",
-            "Errors",
-        ],
-    )
+    for position, document_id in enumerate(compile_order, start=1):
+        compile_rows.append(
+            {
+                "Compile Order": position,
+                "Document ID": document_id,
+                "Status": "Ready",
+            }
+        )
 
-    sections_df = pd.DataFrame(
-        section_rows,
-        columns=[
-            "Document ID",
-            "File Name",
-            "Section Order",
-            "Section",
-        ],
-    )
+    for document_id in circular_dependencies:
+        compile_rows.append(
+            {
+                "Compile Order": "",
+                "Document ID": document_id,
+                "Status": "Circular Dependency",
+            }
+        )
 
-    references_df = pd.DataFrame(
-        reference_rows,
-        columns=[
-            "Source Document",
-            "Referenced Document",
-            "Exists",
-            "Status",
-        ],
-    )
+    for referenced_document, sources in sorted(cross_reference_index.items()):
+        for source_document in sorted(sources):
+            cross_reference_rows.append(
+                {
+                    "Referenced Document": referenced_document,
+                    "Referenced By": source_document,
+                }
+            )
 
-    impact_df = pd.DataFrame(
-        impact_rows,
-        columns=[
-            "Changed Document",
-            "Affected Document",
-        ],
-    )
+    sheets = {
+        "Dashboard": dashboard,
+        "Documents": document_rows,
+        "Sections": section_rows,
+        "References": reference_rows,
+        "Impact Analysis": impact_rows,
+        "Compile Order": compile_rows,
+        "Cross References": cross_reference_rows,
+        "Document Health": health_results,
+        "Diagnostics": diagnostics,
+        "Duplicate Documents": duplicate_documents,
+        "Orphan Documents": orphan_documents,
+        "Reference Coverage": reference_coverage,
+        "Risk Scores": risk_scores,
+        "Change Impact": change_impact,
+        "Version Audit": version_audit,
+        "Owner Summary": owner_summary,
+    }
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        documents_df.to_excel(
-            writer,
-            sheet_name="Documents",
-            index=False,
-        )
 
-        sections_df.to_excel(
-            writer,
-            sheet_name="Sections",
-            index=False,
-        )
+        for sheet_name, rows in sheets.items():
 
-        references_df.to_excel(
-            writer,
-            sheet_name="References",
-            index=False,
-        )
+            pd.DataFrame(rows).to_excel(
+                writer,
+                sheet_name=sheet_name,
+                index=False,
+            )
 
-        impact_df.to_excel(
-            writer,
-            sheet_name="Impact Analysis",
-            index=False,
-        )
-
-        for worksheet in writer.book.worksheets:
-            worksheet.freeze_panes = "A2"
-            worksheet.auto_filter.ref = worksheet.dimensions
-
-            for column_cells in worksheet.columns:
-                width = max(
-                    len(str(cell.value)) if cell.value is not None else 0
-                    for cell in column_cells
-                )
-
-                worksheet.column_dimensions[
-                    column_cells[0].column_letter
-                ].width = min(width + 2, 60)
+            _auto_format_sheet(writer.sheets[sheet_name])
