@@ -1,8 +1,8 @@
 from typing import List
 
 from core.models import DocumentRecord
-from core.reference_status import ReferenceStatus
 from core.reference_rules import classify_reference
+from core.reference_status import ReferenceStatus
 
 
 def validate_references(records: List[DocumentRecord]) -> None:
@@ -52,18 +52,8 @@ def validate_references(records: List[DocumentRecord]) -> None:
                 )
             )
 
+            # Only true validation failures belong in errors.
             if status == "Invalid":
                 record.errors.append(
                     f"Invalid document reference: {reference}"
                 )
-
-        expected_count = sum(
-            1
-            for item in record.reference_statuses
-            if item.message == "Expected"
-        )
-
-        if expected_count:
-            record.errors.append(
-                f"{expected_count} expected document(s) not yet present"
-            )
